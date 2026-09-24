@@ -1,0 +1,42 @@
+# Offline AI mode: `docker compose -f docker-compose.yml -f docker-compose.offline.yml up`
+# (wrapped by `make offline-up`). Models must be prepared first with `make models`.
+#
+# The worker and Ollama are attached ONLY to the `backplane` network, which is
+# `internal: true` (no gateway). Processing audio therefore cannot reach any
+# external API; this is enforced by Docker networking, not just by config.
+services:
+  worker:
+    environment:
+      STT_PROVIDER: whisper_local
+      LLM_PROVIDER: ollama
+      OLLAMA_BASE_URL: http://ollama:11434
+      HF_HUB_OFFLINE: "1"
+    networks: !override [backplane]
+    depends_on:
+      ollama: {condition: service_started}
+
+  api:
+    environment:
+      STT_PROVIDER: whisper_local
+      LLM_PROVIDER: ollama
+
+  ollama:
+    image: ollama/ollama:0.34.4
+    volumes: [ollama-models:/root/.ollama]
+    networks: [backplane]
+    environment:
+      OLLAMA_KEEP_ALIVE: 30m
+
+  # `make models`: one-off container WITH internet access that pulls the LLM
+  # into the same volume the offline `ollama` service uses.
+  ollama-pull:
+    image: ollama/ollama:0.34.4
+    profiles: [models]
+    volumes: [ollama-models:/root/.ollama]
+    networks: [edge]
+    entrypoint: ["sh", "-c", "ollama serve >/dev/null 2>&1 & sleep 3 && ollama pull \"$$LLM_MODEL\""]
+    environment:
+      LLM_MODEL: ${LLM_MODEL:-qwen2.5:3b-instruct}
+
+volumes:
+  ollama-models:

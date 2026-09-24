@@ -41,7 +41,7 @@ The API and worker use the same backend image with different entry points. Postg
 
 | Decision | Reason |
 |---|---|
-| Direct-to-S3 upload | Audio does not consume API memory or bandwidth. A presigned POST constrains key, content type, and maximum size at the storage boundary. |
+| Direct-to-S3 upload | Audio does not consume API memory or bandwidth. Clients write only to a short-lived `staging/` key; completion conditionally copies the verified object to a server-owned `audio/` key under a durable finalization lease. |
 | PostgreSQL as job state | Celery is at-least-once delivery. Durable state and uniqueness constraints make redelivery safe without pretending the queue provides exactly-once execution. |
 | Short Celery stages | Transcription and LLM calls retry independently; a failed LLM request does not repeat transcription. |
 | Provider interfaces at STT/LLM boundaries | Cloud and local execution share the same pipeline without abstracting the rest of the Django application. |
@@ -53,7 +53,7 @@ More detail is in [docs/design-decisions.md](docs/design-decisions.md), [docs/ar
 
 ## Quick start
 
-Requirements: Docker with Compose v2, GNU make, and Python 3 for the demo client.
+Requirements: Docker with Compose v2, GNU make, and Python 3. The bundled synthetic demo also needs `ffmpeg` and either `espeak-ng` or `espeak`; alternatively pass your own audio file to `scripts/demo.py`.
 
 ```bash
 cp .env.example .env
@@ -138,14 +138,15 @@ User-authored analysis instructions never become system instructions. Fixed appl
 
 Celery may deliver a task more than once. Each processing stage therefore:
 
-- claims the job under a short row lock;
+- acquires a short PostgreSQL execution lease under a row lock;
 - releases the transaction before storage/provider I/O;
-- persists the result under a second short row lock;
-- relies on uniqueness constraints as the final guard against duplicate durable results.
+- rejects concurrent duplicate deliveries while another live lease owns the stage;
+- persists only when both stage and lease identity still match;
+- relies on uniqueness constraints as the final durable backstop.
 
 A worker can still call an external provider twice if it dies after the provider returns but before persistence. Avoiding that completely requires provider-side idempotency or a durable request/result protocol; the application guarantees one durable transcript and one durable result per stage instead.
 
-Retryable provider failures use bounded exponential backoff with jitter. Permanent failures move the job to `FAILED`. A stalled-job sweep can republish jobs that were committed but not successfully delivered to Redis.
+Retryable provider failures use bounded exponential backoff with jitter. Permanent failures move the job to `FAILED`. Upload completion uses the same short-transaction pattern: a PostgreSQL `FINALIZING` lease serializes COPY against competing completion, deletion and expiry without holding a transaction during S3 I/O. Celery beat periodically republishes stalled jobs after their execution lease expires and also drives upload-expiry/storage cleanup.
 
 ## Offline mode
 
@@ -167,7 +168,7 @@ The offline Compose overlay isolates the worker and Ollama from external network
 
 ## AWS deployment reference
 
-Terraform under `infrastructure/terraform` defines a production-shaped AWS deployment using ECS Fargate, RDS PostgreSQL, ElastiCache Redis, S3, Secrets Manager, an ALB, IAM roles and CloudWatch.
+Terraform under `infrastructure/terraform` defines a production-shaped AWS deployment using ECS Fargate API/worker/beat services, RDS PostgreSQL, ElastiCache Redis, S3, Secrets Manager, an ALB, IAM roles and CloudWatch.
 
 The Terraform is retained as infrastructure design and is validated in CI. No live AWS environment is required to run or evaluate the project.
 
@@ -179,7 +180,6 @@ The Terraform is retained as infrastructure design and is validated in CI. No li
 - The current mobile UI does not manage prompt templates; template management is exposed through the authenticated API.
 - Token authentication is adequate for this service skeleton but a real consumer product needs login, token rotation, account recovery, and tenant policy.
 - Worker autoscaling is not yet driven by queue depth.
-- The stalled-job sweep is a management command; a long-lived deployment should schedule it.
 - Terraform is validated in CI but cloud resources are not provisioned by CI.
 
 ## Development

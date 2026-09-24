@@ -1,0 +1,71 @@
+[project]
+name = "voice-analysis-backend"
+version = "0.1.0"
+description = "Voice Analysis API and processing worker"
+requires-python = ">=3.13"
+dependencies = [
+    "django>=5.2,<6",
+    "djangorestframework>=3.16",
+    "django-cors-headers>=4.7",
+    "dj-database-url>=2.3",
+    "psycopg[binary]>=3.2",
+    "celery[redis]>=5.5",
+    "redis>=5.2",
+    "boto3>=1.38",
+    "pydantic>=2.11",
+    "httpx>=0.28",
+    "openai>=1.80",
+    "faster-whisper>=1.1",
+    "gunicorn>=23",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-django>=4.11",
+    "factory-boy>=3.3",
+    "moto[s3]>=5.1",
+    "ruff>=0.11",
+    "mypy>=1.15",
+    "django-stubs[compatible-mypy]>=5.2",
+    "djangorestframework-stubs[compatible-mypy]>=3.16",
+    "celery-types>=0.23",
+    "boto3-stubs[s3]>=1.38",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+extend-exclude = ["**/migrations/*"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "DJ", "S", "BLE", "RET", "SIM", "PT"]
+# DJ001: job error fields are deliberately nullable (NULL = "no error").
+ignore = ["S101", "DJ001"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S105", "S106", "S108"]
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "config.test_settings"
+python_files = ["test_*.py"]
+addopts = "-ra --strict-markers"
+markers = [
+    "live_ai: talks to a real local model (Ollama / faster-whisper); skipped unless LIVE_AI=1",
+]
+
+[tool.mypy]
+python_version = "3.13"
+plugins = ["mypy_django_plugin.main", "mypy_drf_plugin.main"]
+strict_optional = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+check_untyped_defs = true
+ignore_missing_imports = true
+exclude = ["migrations/", "tests/"]
+
+[tool.django-stubs]
+django_settings_module = "config.settings"

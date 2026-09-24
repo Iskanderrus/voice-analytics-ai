@@ -1,0 +1,22 @@
+environment      = "demo"
+services_enabled = false
+
+api_desired_count    = 1
+api_max_count        = 1
+worker_desired_count = 1
+worker_concurrency   = 1
+
+db_instance_class               = "db.t4g.micro"
+db_allocated_storage            = 20
+db_multi_az                     = false
+db_deletion_protection          = false
+db_skip_final_snapshot          = true
+db_performance_insights_enabled = false
+
+redis_node_type    = "cache.t4g.micro"
+log_retention_days = 7
+
+stt_provider = "openai"
+stt_model    = "whisper-1"
+llm_provider = "openai"
+llm_model    = "gpt-4o-mini"

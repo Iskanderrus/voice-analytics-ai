@@ -1,0 +1,24 @@
+{
+  "expo": {
+    "name": "Voice Analytics AI",
+    "slug": "voice-analytics-ai",
+    "scheme": "voiceanalyticsai",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "package": "com.voiceanalyticsai.app",
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "single"
+    },
+    "plugins": [
+      "expo-router"
+    ]
+  }
+}

@@ -1,0 +1,106 @@
+# Local stack. make up = this file; the offline overlay swaps in local AI providers.
+name: voice-analysis
+
+x-backend: &backend
+  build: ./backend
+  image: voice-analysis-backend:local
+  env_file: .env
+  environment:
+    DATABASE_URL: postgres://voice:voice@postgres:5432/voice
+    REDIS_URL: redis://redis:6379/0
+    S3_ENDPOINT_URL: http://minio:9000
+    AWS_ACCESS_KEY_ID: minioadmin
+    AWS_SECRET_ACCESS_KEY: minioadmin
+    S3_BUCKET: voice-audio
+  volumes:
+    - whisper-models:/models
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: voice
+      POSTGRES_PASSWORD: voice
+      POSTGRES_DB: voice
+    ports: ["${POSTGRES_PORT:-5432}:5432"]
+    volumes: [postgres-data:/var/lib/postgresql/data]
+    networks: [edge, backplane]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U voice -d voice"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    ports: ["${REDIS_PORT:-6379}:6379"]
+    networks: [edge, backplane]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  minio:
+    image: cgr.dev/chainguard/minio@sha256:bd014394a80898e68c149f2311fdf8d5a2c2f3bb2c33b9327ae6d02b4b065ae1
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports: ["${MINIO_PORT:-9000}:9000", "${MINIO_CONSOLE_PORT:-9001}:9001"]
+    volumes: [minio-data:/data]
+    networks: [edge, backplane]
+    healthcheck:
+      test: ["CMD", "/usr/bin/minio", "--version"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  migrate:
+    <<: *backend
+    command: ["sh", "-c", "python manage.py migrate --noinput && python manage.py ensure_bucket"]
+    networks: [backplane]
+    depends_on:
+      postgres: {condition: service_healthy}
+      minio: {condition: service_started}
+
+  api:
+    <<: *backend
+    ports: ["${API_PORT:-8000}:8000"]
+    networks: [edge, backplane]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/live')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  worker:
+    <<: *backend
+    command: ["celery", "-A", "config", "worker", "--loglevel", "INFO", "--concurrency", "2"]
+    networks: [edge, backplane]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+
+  beat:
+    <<: *backend
+    command: ["celery", "-A", "config", "beat", "--loglevel", "INFO"]
+    networks: [backplane]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+
+networks:
+  edge: {}
+  backplane:
+    internal: true
+
+volumes:
+  postgres-data:
+  minio-data:
+  whisper-models:

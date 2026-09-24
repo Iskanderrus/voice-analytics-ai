@@ -1,0 +1,26 @@
+# Secrets / local config
+.env
+*.local
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+backend/staticfiles/
+
+# Terraform (the provider lock file IS committed)
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+
+# Tooling output
+.playwright-mcp/
+node_modules/
+.DS_Store
+
+# Generated demo media
+scripts/fixtures/*.m4a

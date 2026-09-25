@@ -37,19 +37,11 @@ State transitions, filter evaluation, schema validation, retry policy, and persi
 
 The API and worker use the same backend image with different entry points. PostgreSQL owns durable job state; Redis only transports Celery messages.
 
-## Why this shape
+## Design notes
 
-| Decision | Reason |
-|---|---|
-| Direct-to-S3 upload | Audio does not consume API memory or bandwidth. Clients write only to a short-lived `staging/` key; completion conditionally copies the verified object to a server-owned `audio/` key under a durable finalization lease. |
-| PostgreSQL as job state | Celery is at-least-once delivery. Durable state and uniqueness constraints make redelivery safe without pretending the queue provides exactly-once execution. |
-| Short Celery stages | Transcription and LLM calls retry independently; a failed LLM request does not repeat transcription. |
-| Provider interfaces at STT/LLM boundaries | Cloud and local execution share the same pipeline without abstracting the rest of the Django application. |
-| Pydantic output validation | Model output is untrusted until it satisfies the expected schema. Invalid output gets a bounded repair attempt. |
-| Polling from the mobile client | Processing takes seconds or minutes; polling is simpler than maintaining a push channel and survives reconnects naturally. |
-| ECS Fargate instead of Kubernetes | The runtime has one API service and one worker service. ECS provides the deployment and scaling primitives without a cluster control plane. |
+The main choices are direct-to-object-storage upload, PostgreSQL as canonical job state, short Celery stages, narrow STT/LLM provider boundaries, application-side schema validation, and polling from the client.
 
-More detail is in [docs/design-decisions.md](docs/design-decisions.md), [docs/architecture.md](docs/architecture.md), [docs/ai-pipeline.md](docs/ai-pipeline.md), and [docs/failure-model.md](docs/failure-model.md).
+The trade-offs are documented in [docs/design-decisions.md](docs/design-decisions.md). Runtime mechanics and failure windows are covered in [docs/architecture.md](docs/architecture.md) and [docs/failure-model.md](docs/failure-model.md).
 
 ## Quick start
 
@@ -136,17 +128,9 @@ User-authored analysis instructions never become system instructions. Fixed appl
 
 ## Reliability
 
-Celery may deliver a task more than once. Each processing stage therefore:
+Celery delivery is at least once. Each analysis stage acquires a short PostgreSQL execution lease, releases the transaction before storage or provider I/O, and persists only while the same claim still owns the stage. Celery beat republishes recoverable stalled work after lease expiry.
 
-- acquires a short PostgreSQL execution lease under a row lock;
-- releases the transaction before storage/provider I/O;
-- rejects concurrent duplicate deliveries while another live lease owns the stage;
-- persists only when both stage and lease identity still match;
-- relies on uniqueness constraints as the final durable backstop.
-
-A worker can still call an external provider twice if it dies after the provider returns but before persistence. Avoiding that completely requires provider-side idempotency or a durable request/result protocol; the application guarantees one durable transcript and one durable result per stage instead.
-
-Retryable provider failures use bounded exponential backoff with jitter. Permanent failures move the job to `FAILED`. Upload completion uses the same short-transaction pattern: a PostgreSQL `FINALIZING` lease serializes COPY against competing completion, deletion and expiry without holding a transaction during S3 I/O. Celery beat periodically republishes stalled jobs after their execution lease expires and also drives upload-expiry/storage cleanup.
+Upload completion uses the same ownership pattern around the verified staging-to-final object copy. External provider invocation is intentionally not claimed to be exactly once: a worker crash after a provider response but before persistence can repeat that call.
 
 ## Offline mode
 
@@ -195,4 +179,6 @@ make terraform-validate
 
 CI runs backend formatting, linting, type checks, migration checks, and tests against PostgreSQL. It also runs mobile lint/typecheck/tests, validates Terraform and Compose files, and builds the backend image.
 
-The repository includes tests because concurrency, ownership, prompt boundaries, retry behaviour, and state transitions are part of the design rather than incidental implementation details.
+## Repository history
+
+This repository is a curated portfolio snapshot exported from private working repositories. The development history was intentionally squashed during export to remove internal planning and review material, so the small commit history here does not represent the original implementation chronology.

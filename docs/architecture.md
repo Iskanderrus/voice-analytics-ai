@@ -132,14 +132,8 @@ work     download finalized audio; call provider; validate output               
 persist  BEGIN; SELECT … FOR UPDATE; same stage + claim id? persist + transition; COMMIT (~ms)
 ```
 
-Row locks are held for milliseconds and only on the one job row. A different duplicate
-delivery that finds a live execution lease exits before provider I/O and does not consume
-another stage attempt. Persistence verifies the lease identity, so an old worker cannot
-persist after ownership has moved.
-
-The unavoidable window: the external call succeeded, but the worker died before persist
-committed. The redelivered message pays for the call again. Nothing is duplicated in the
-DB, and cost is bounded by `PIPELINE_MAX_STAGE_ATTEMPTS`. See [failure-model.md](failure-model.md).
+Row locks are short-lived. Duplicate delivery, stale-owner rejection and the
+paid-call/lost-result window are documented in [failure-model.md](failure-model.md).
 
 ## Upload flow
 
@@ -160,35 +154,21 @@ POST /uploads/{id}/complete
 worker -> downloads audio/ only
 ```
 
-The client never receives write credentials for the finalized key. Reusing a still-valid
-signed POST can therefore replace staging data after completion without changing the
-object processed by workers. A live finalization lease also serializes competing
-`/complete` requests and fences deletion/expiry before COPY. Periodic maintenance removes
-expired staging objects; the AWS bucket also has a lifecycle expiry for the staging prefix.
+Workers read only the finalized key; staging cleanup is handled by periodic maintenance
+with an S3 lifecycle rule as a backstop. The rationale for the staging/final split is in
+[design-decisions.md](design-decisions.md).
 
 ## Deletion
 
-`DELETE /uploads/{id}` works in order:
+`DELETE /uploads/{id}` first locks and tombstones the upload while deleting its derived
+analysis rows, then schedules object cleanup after commit. If finalization is still live,
+the tombstone retains enough ownership state to prevent cleanup from racing the in-flight
+copy; late finalizers remove their own write before returning.
 
-1. In one transaction: lock the upload, hard-delete its jobs (transcripts and results
-   cascade), and mark the upload `DELETED` with `deleted_at`.
-2. If a finalizer owns a live lease, keep that claim on the tombstone so storage cleanup
-   cannot declare the permanent object gone while COPY is still allowed to run.
-3. After commit, best-effort enqueue `delete_upload_object`. If Redis publication fails,
-   the committed DELETE still returns success.
-4. A finalizer that observes the tombstone after COPY removes its own late write. Celery
-   beat periodically republishes cleanup for tombstones and removes staging again after
-   the signed upload URL has expired. `manage.py purge_deleted_objects` remains a manual
-   repair tool.
-
-The DB becomes consistent first, so the API never serves data for a deleted upload. A
-lost cleanup task leaves an orphaned object, which the sweep finds. The reverse order
-could not be recovered: deleting S3 first and then crashing would leave DB rows pointing
-at nothing. A stage running during deletion finds no job at persist time and drops its output.
-Analysis creation takes the same upload-row lock as deletion, so it cannot create durable
-job metadata from a stale pre-delete upload instance.
-
-`DELETE /analyses/{id}` deletes one job and its derived data and keeps the audio.
+Celery beat republishes cleanup for tombstones and handles abandoned staging objects.
+`DELETE /analyses/{id}` removes one analysis and its derived data but keeps the audio.
+Analysis creation and upload deletion share the upload-row lock, so they cannot commit
+contradictory ownership state.
 
 ## Observability
 

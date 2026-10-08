@@ -4,6 +4,8 @@ Voice Analytics AI accepts an audio recording, transcribes it, runs a general st
 
 The same application code supports cloud providers and a fully local mode with faster-whisper and Ollama.
 
+This is an independent portfolio project focused on the backend engineering around long-running AI workloads: durable workflow state, asynchronous execution, object-storage boundaries, concurrency, recovery, structured model output and provider isolation. It is not presented as a live production service; the AWS configuration is reference infrastructure and the reproducible local/offline path is the primary way to run it.
+
 ## Architecture
 
 ```mermaid
@@ -181,4 +183,8 @@ CI runs backend formatting, linting, type checks, migration checks, and tests ag
 
 ## Repository history
 
-This repository is a curated portfolio snapshot exported from private working repositories. The development history was intentionally squashed during export to remove internal planning and review material, so the small commit history here does not represent the original implementation chronology.
+This repository is a curated portfolio snapshot. Development work was consolidated before publication, so the small commit history does not represent the original implementation chronology.
+
+## License
+
+Licensed under the [Apache License 2.0](LICENSE).
